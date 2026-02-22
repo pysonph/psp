@@ -532,7 +532,7 @@ def is_authorized(message):
 def keep_cookie_alive():
     while True:
         try:
-            time.sleep(10 * 60) # runs every 10 minutes
+            time.sleep(2 * 60) # runs every 10 minutes
             scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
             scraper.cookies.update(get_login_cookies())
             
@@ -656,7 +656,7 @@ def set_cookie_command(message):
 @bot.message_handler(commands=['balance'])
 def check_balance_command(message):
     if not is_authorized(message): return bot.reply_to(message, "❌ unauthorized access.")
-    loading_msg = bot.reply_to(message, "⏳ fetching balance...")
+    loading_msg = bot.reply_to(message, " fetching balance...")
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
     scraper.cookies.update(get_login_cookies()) 
     headers = {'X-Requested-With': 'XMLHttpRequest', 'Origin': 'https://www.smile.one'}
@@ -697,7 +697,7 @@ def handle_activecode(message):
         base_referer = 'https://www.smile.one/'
         api_type = "BR"
 
-    loading_msg = bot.reply_to(message, f"⏳ checking code `{activation_code}` for {api_type} region...", parse_mode="Markdown")
+    loading_msg = bot.reply_to(message, f"checking code `{activation_code}` for {api_type} region...", parse_mode="Markdown")
     
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
     scraper.cookies.update(get_login_cookies())
@@ -797,7 +797,7 @@ def handle_check_role(message):
     game_id = match.group(1).strip()
     zone_id = match.group(2).strip()
     
-    loading_msg = bot.reply_to(message, "⏳ searching for account and region...")
+    loading_msg = bot.reply_to(message, " searching for account and region...")
 
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
     scraper.cookies.update(get_login_cookies())
