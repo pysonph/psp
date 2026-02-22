@@ -226,30 +226,34 @@ def get_smile_balance(scraper, headers, balance_url='https://www.smile.one/custo
     try:
         response = scraper.get(balance_url, headers=headers)
         
+        # BR Balance (Main Balance) ရှာခြင်း
         br_match = re.search(r'(?i)(?:Balance|Saldo)[\s:]*?<\/p>\s*<p>\s*([\d\.,]+)', response.text)
         if br_match:
             balances['br_balance'] = float(br_match.group(1).replace(',', ''))
-        else:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            main_balance_div = soup.find('div', class_='balance-coins')
-            if main_balance_div:
-                p_tags = main_balance_div.find_all('p')
-                if len(p_tags) >= 2:
-                    balances['br_balance'] = float(p_tags[1].text.strip().replace(',', ''))
-                    
+        
+        # PH Balance ရှာခြင်း (ပိုတိကျအောင် ပြင်ထားသည်)
+        # PH ဟုသေချာမှသာ ယူမည်၊ မဟုတ်ရင် 0 ဟုသာ သတ်မှတ်မည်
         ph_match = re.search(r'(?i)Saldo PH[\s:]*?<\/span>\s*<span>\s*([\d\.,]+)', response.text)
         if ph_match:
             balances['ph_balance'] = float(ph_match.group(1).replace(',', ''))
         else:
+            # Fallback for PH: only if specifically labeled
             soup = BeautifulSoup(response.text, 'html.parser')
-            ph_balance_container = soup.find('div', id='all-balance')
-            if ph_balance_container:
-                span_tags = ph_balance_container.find_all('span')
-                if len(span_tags) >= 2:
-                    balances['ph_balance'] = float(span_tags[1].text.strip().replace(',', ''))
+            ph_container = soup.find('div', id='all-balance')
+            if ph_container:
+                # PH ဆိုတဲ့စာသားပါမှ balance ကိုယူမယ်
+                rows = ph_container.find_all('div', class_='line')
+                for row in rows:
+                    if "PH" in row.text.upper():
+                        amount_span = row.find_all('span')[-1]
+                        balances['ph_balance'] = float(amount_span.text.strip().replace(',', ''))
+                        break
+
     except Exception as e:
+        print(f"Error parsing balance: {e}")
         pass
     return balances
+
 
 # ==========================================
 # 3. smile.one scraper function (mlbb)
@@ -284,7 +288,7 @@ def process_smile_one_order(user_id, zone_id, product_id, currency_name, item_pr
         response = scraper.get(main_url, headers=headers)
         
         if response.status_code in [403, 503] or "cloudflare" in response.text.lower() or "security verification" in response.text.lower():
-             return {"status": "error", "message": "⚠️ cloudflare security blocked the bot. insert new cookie from browser."}
+             return {"status": "error", "message": "⚠️ Cloudflare blocked. Insert new cookie."}
 
         soup = BeautifulSoup(response.text, 'html.parser')
         
@@ -295,7 +299,17 @@ def process_smile_one_order(user_id, zone_id, product_id, currency_name, item_pr
             csrf_input = soup.find('input', {'name': '_csrf'})
             if csrf_input: csrf_token = csrf_input.get('value')
 
-        if not csrf_token: return {"status": "error", "message": "csrf token not found. insert new cookie using /setcookie."}
+        if not csrf_token: return {"status": "error", "message": "CSRF token not found."}
+
+        # ---------------------------------------------------------
+        # [BLOCK A] BALANCE PRE-CHECK (ငွေမလောက်ရင် ဖြတ်ခွင့်မပေးတော့ပါ)
+        # ---------------------------------------------------------
+        current_balances = get_smile_balance(scraper, headers, balance_url)
+        check_balance = current_balances.get('ph_balance', 0.0) if currency_name == 'PH' else current_balances.get('br_balance', 0.0)
+        
+        if item_price and float(check_balance) < float(item_price):
+            return {"status": "error", "message": f"❌ Insufficient {currency_name} Balance!\nHave: {check_balance}\nNeed: {item_price}"}
+        # ---------------------------------------------------------
 
         check_data = {
             'user_id': user_id, 
@@ -308,10 +322,9 @@ def process_smile_one_order(user_id, zone_id, product_id, currency_name, item_pr
             role_result = role_response.json()
             ig_name = role_result.get('username') or role_result.get('data', {}).get('username')
             if not ig_name or str(ig_name).strip() == "":
-                real_error = role_result.get('msg') or role_result.get('message') or "account not found."
-                return {"status": "error", "message": f"❌ invalid account: {real_error}"}
+                return {"status": "error", "message": f"❌ Invalid Account."}
         except Exception:
-            return {"status": "error", "message": "⚠️ check role api error: cannot check account."}
+            return {"status": "error", "message": "⚠️ Check Role API Error."}
 
         query_data = {
             'user_id': user_id, 'zone_id': zone_id, 'pid': product_id,
@@ -319,27 +332,12 @@ def process_smile_one_order(user_id, zone_id, product_id, currency_name, item_pr
         }
         
         query_response = scraper.post(query_url, data=query_data, headers=headers)
-        
-        try: 
-            query_result = query_response.json()
-        except Exception: 
-            if "cloudflare" in query_response.text.lower() or "just a moment" in query_response.text.lower():
-                return {"status": "error", "message": "⚠️ cloudflare blocked the query."}
-            return {"status": "error", "message": f"query api error (status: {query_response.status_code})"}
+        try: query_result = query_response.json()
+        except: return {"status": "error", "message": "Query API Error"}
             
         flowid = query_result.get('flowid') or query_result.get('data', {}).get('flowid')
-        
         if not flowid:
-            raw_debug = json.dumps(query_result, ensure_ascii=False)
-            real_error = query_result.get('msg') or query_result.get('message') or ""
-            
-            if "login" in str(real_error).lower() or "unauthorized" in str(real_error).lower():
-                return {"status": "error", "message": "⚠️ cookie expired. please insert new cookie using `/setcookie`."}
-            else:
-                err_text = real_error if real_error else "account not found or rejected."
-                return {"status": "error", "message": f"smile.one response: {err_text}\n\n*(debug: {raw_debug})*"}
-
-        current_balances = get_smile_balance(scraper, headers, balance_url)
+            return {"status": "error", "message": "Order rejected (No FlowID)."}
 
         pay_data = {
             '_csrf': csrf_token, 'user_id': user_id, 'zone_id': zone_id, 'pay_methond': 'smilecoin',
@@ -350,11 +348,12 @@ def process_smile_one_order(user_id, zone_id, product_id, currency_name, item_pr
         pay_text = pay_response.text.lower()
         
         if "saldo insuficiente" in pay_text or "insufficient" in pay_text:
-            return {"status": "error", "message": "insufficient balance in your account."}
+            return {"status": "error", "message": "Insufficient balance in account."}
         
         time.sleep(2) 
         
-        real_order_id = "not found"
+        # Check Success Logic...
+        real_order_id = "Not Found"
         is_success = False
 
         api_params = {'type': 'orderlist', 'p': '1', 'pageSize': '5'}
@@ -362,41 +361,28 @@ def process_smile_one_order(user_id, zone_id, product_id, currency_name, item_pr
             hist_res = scraper.get(order_api_url, params=api_params, headers=headers)
             hist_json = hist_res.json()
             
-            if 'list' in hist_json and isinstance(hist_json['list'], list) and len(hist_json['list']) > 0:
+            if 'list' in hist_json and isinstance(hist_json['list'], list):
                 for order in hist_json['list']:
                     if str(order.get('user_id')) == str(user_id) and str(order.get('server_id')) == str(zone_id):
                         if str(order.get('order_status', '')).lower() == 'success' or str(order.get('status')) == '1':
-                            real_order_id = str(order.get('increment_id', "not found"))
+                            real_order_id = str(order.get('increment_id', "Not Found"))
                             is_success = True
                             break
-        except Exception as e:
-            pass
+        except: pass
 
         if not is_success:
-            try:
-                pay_json = pay_response.json()
-                code = str(pay_json.get('code', ''))
-                status = str(pay_json.get('status', ''))
-                msg = str(pay_json.get('msg', '')).lower()
-                if code in ['200', '0', '1'] or status in ['200', '0', '1'] or msg in ['success', 'ok', 'sucesso'] or 'success' in pay_text:
-                    is_success = True
-            except:
-                if 'success' in pay_text or 'ok' in pay_text or 'sucesso' in pay_text:
-                    is_success = True
+            if 'success' in pay_text or 'ok' in pay_text:
+                is_success = True
 
         if is_success:
-            return {"status": "success", "ig_name": ig_name, "order_id": real_order_id, "balances": current_balances, "csrf_token": csrf_token}
+            # Update balance for display
+            new_balances = get_smile_balance(scraper, headers, balance_url)
+            return {"status": "success", "ig_name": ig_name, "order_id": real_order_id, "balances": new_balances, "csrf_token": csrf_token}
         else:
-            err_msg = "payment failed."
-            try:
-                err_json = pay_response.json()
-                raw_pay_debug = json.dumps(err_json, ensure_ascii=False)
-                if 'msg' in err_json: 
-                    err_msg = f"payment failed. ({err_json['msg']})\n\n*(debug: {raw_pay_debug})*"
-            except: pass
-            return {"status": "error", "message": err_msg}
+            return {"status": "error", "message": "Payment failed (Unknown reason)."}
 
-    except Exception as e: return {"status": "error", "message": f"system error: {str(e)}"}
+    except Exception as e: return {"status": "error", "message": f"System Error: {str(e)}"}
+
 
 # ==========================================
 # 3.1 magic chess scraper function (mcc)
