@@ -642,7 +642,7 @@ def set_cookie_command(message):
 #####################################################################
 
 # ==========================================
-# 🔌 SMART COOKIE PARSER (Auto Detect)
+# 🔌 SMART COOKIE PARSER (Fixed for Database Module)
 # ==========================================
 @bot.message_handler(func=lambda message: "PHPSESSID" in message.text and "cf_clearance" in message.text and ("{" in message.text or "Cookies" in message.text))
 def handle_raw_cookie_dump(message):
@@ -659,7 +659,7 @@ def handle_raw_cookie_dump(message):
         did_match = re.search(r"['\"]_did['\"]\s*:\s*['\"]([^'\"]+)['\"]", text)
 
         if not phpsessid_match or not cf_clearance_match:
-            return bot.reply_to(message, "PHPSESSID နှင့် cf_clearance ကို ရှာမတွေ့ပါ။ Format မှန်ကန်ကြောင်း စစ်ဆေးပါ။")
+            return bot.reply_to(message, "⚠️ PHPSESSID နှင့် cf_clearance ကို ရှာမတွေ့ပါ။ Format မှန်ကန်ကြောင်း စစ်ဆေးပါ။")
 
         # 📌 တန်ဖိုးများ ထုတ်ယူခြင်း
         val_php = phpsessid_match.group(1)
@@ -672,19 +672,18 @@ def handle_raw_cookie_dump(message):
         if val_bm: formatted_cookie += f" __cf_bm={val_bm};"
         if val_did: formatted_cookie += f" _did={val_did};"
 
-        # 📌 Database ထဲသို့ တန်းထည့်မည်
-        if settings_collection is not None:
-            settings_collection.update_one({"type": "login_cookies"}, {"$set": {"raw_cookie": formatted_cookie}}, upsert=True)
-            
-            # 📌 User ကို ပြန်ပြောမည်
-            response_msg = f"✅ **Cookie များကို အလိုအလျောက် သိမ်းဆည်းလိုက်ပါပြီ!**\n\n"
-            response_msg += f"📥 **Detected:**\n`/setcookie {formatted_cookie}`"
-            bot.reply_to(message, response_msg, parse_mode="Markdown")
-        else:
-            bot.reply_to(message, "❌ Database Error: Not Connected.")
+        # 🛠️ ပြင်ဆင်ထားသော နေရာ (FIXED HERE)
+        # settings_collection အစား db module ကို သုံးပါမည်
+        db.update_main_cookie(formatted_cookie)
+        
+        # 📌 User ကို ပြန်ပြောမည်
+        response_msg = f"✅ **Cookie များကို အလိုအလျောက် သိမ်းဆည်းလိုက်ပါပြီ!**\n\n"
+        response_msg += f"📥 **Detected:**\n`/setcookie {formatted_cookie}`"
+        bot.reply_to(message, response_msg, parse_mode="Markdown")
 
     except Exception as e:
         bot.reply_to(message, f"❌ Parsing Error: {str(e)}")
+
 
 
 
