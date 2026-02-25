@@ -1,6 +1,6 @@
-pyrogram
-tgcrypto
 cloudscraper
 beautifulsoup4
-playwright
 python-dotenv
+playwright
+pyrogram
+TgCrypto
