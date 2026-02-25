@@ -562,32 +562,53 @@ async def handle_direct_buy(client: Client, message: Message):
 # ==========================================
 # 9. Start Bot Command
 # ==========================================
-@app.on_message(filters.command("start") & filters.private)
-async def send_welcome(client: Client, message: Message):
+@app.on_message(filters.command("start"))
+async def send_welcome(client, message: Message):
     try:
         tg_id = str(message.from_user.id)
         
         first_name = message.from_user.first_name or ""
         last_name = message.from_user.last_name or ""
-        full_name = f"{first_name} {last_name}".strip() or "User"
+        full_name = f"{first_name} {last_name}".strip()
+        if not full_name:
+            full_name = "User"
             
-        safe_full_name = html.escape(full_name)
+        safe_full_name = full_name.replace('<', '').replace('>', '')
         username_display = f'<a href="tg://user?id={tg_id}">{safe_full_name}</a>'
         
-        status = "🟢 Aᴄᴛɪᴠᴇ" if is_authorized(message) else "🔴 Nᴏᴛ Aᴄᴛɪᴠᴇ"
+        # 🟢 Pyrogram အတွက် <emoji id="..."> သုံးရပါမည်
+        EMOJI_1 = "5956355397366320202" # 🥺
+        EMOJI_2 = "5954097490109140119" # 👤
+        EMOJI_3 = "5958289678837746828" # 🆔
+        EMOJI_4 = "5956330306167376831" # 📊
+        EMOJI_5 = "5954078884310814346" # 📞
+
+        if is_authorized(message):
+            status = "🟢 Aᴄᴛɪᴠᴇ"
+        else:
+            status = "🔴 Nᴏᴛ Aᴄᴛɪᴠᴇ"
             
         welcome_text = (
-            f"ʜᴇʏ ʙᴀʙʏ🥺\n\n"
-            f"Usᴇʀɴᴀᴍᴇ: {username_display}\n"
-            f"𝐈𝐃: <code>{tg_id}</code>\n"
-            f"Sᴛᴀᴛᴜs: {status}\n\n"
-            f"Cᴏɴᴛᴀᴄᴛ ᴜs: @iwillgoforwardsalone"
+            f"ʜᴇʏ ʙᴀʙʏ <emoji id='{EMOJI_1}'>🥺</emoji>\n\n"
+            f"<emoji id='{EMOJI_2}'>👤</emoji> Usᴇʀɴᴀᴍᴇ: {username_display}\n"
+            f"<emoji id='{EMOJI_3}'>🆔</emoji> 𝐈𝐃: <code>{tg_id}</code>\n"
+            f"<emoji id='{EMOJI_4}'>📊</emoji> Sᴛᴀᴛᴜs: {status}\n\n"
+            f"<emoji id='{EMOJI_5}'>📞</emoji> Cᴏɴᴛᴀᴄᴛ ᴜs: @iwillgoforwardsalone"
         )
         
-        await message.reply_text(welcome_text, parse_mode=ParseMode.HTML)
+        await message.reply(welcome_text, parse_mode=ParseMode.HTML)
         
     except Exception as e:
-        await message.reply_text(f"Error starting: {str(e)}")
+        print(f"Start Cmd Error: {e}")
+        
+        fallback_text = (
+            f"ʜᴇʏ ʙᴀʙʏ 🥺\n\n"
+            f"👤 Usᴇʀɴᴀᴍᴇ: {full_name}\n"
+            f"🆔 𝐈𝐃: <code>{tg_id}</code>\n"
+            f"📊 Sᴛᴀᴛᴜs: {status}\n\n"
+            f"📞 Cᴏɴᴛᴀᴄᴛ ᴜs: @iwillgoforwardsalone"
+        )
+        await message.reply(fallback_text, parse_mode=ParseMode.HTML)
 
 # ==========================================
 # 🚀 Startup Logic
