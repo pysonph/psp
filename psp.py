@@ -1,4 +1,4 @@
-# wanglin.py (Updated: Single Shared Wallet System & UI Match)
+# wanglin.py (Updated: Official Single Balance System & UI Match)
 import io
 import os
 import re
@@ -47,7 +47,7 @@ app = Client(
 transaction_lock = asyncio.Lock()
 
 # ==========================================
-# 🗄️ LOCAL JSON DATABASE SETUP (SHARED WALLET)
+# 🗄️ LOCAL JSON DATABASE SETUP (NO VIRTUAL WALLET)
 # ==========================================
 DB_FILE = 'database.json'
 
@@ -55,7 +55,6 @@ def load_data():
     if not os.path.exists(DB_FILE):
         return {
             "users": [str(OWNER_ID)], 
-            "shared_wallet": {"br_balance": 0.0, "ph_balance": 0.0}, 
             "cookie": "", 
             "orders": []
         }
@@ -63,15 +62,17 @@ def load_data():
         with open(DB_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
-        # Migrate old Dict format to List format for users
+        # Clean up old virtual wallet data if exists
         if "users" in data and isinstance(data["users"], dict):
             data["users"] = list(data["users"].keys())
             save_data(data)
             
+        if "shared_wallet" in data:
+            del data["shared_wallet"]
+            save_data(data)
+            
         if "users" not in data:
             data["users"] = [str(OWNER_ID)]
-        if "shared_wallet" not in data:
-            data["shared_wallet"] = {"br_balance": 0.0, "ph_balance": 0.0}
         if "orders" not in data:
             data["orders"] = []
             
@@ -79,7 +80,6 @@ def load_data():
     except Exception:
         return {
             "users": [str(OWNER_ID)], 
-            "shared_wallet": {"br_balance": 0.0, "ph_balance": 0.0}, 
             "cookie": "", 
             "orders": []
         }
@@ -91,7 +91,7 @@ def save_data(data):
     except Exception as e:
         print(f"❌ Error saving database: {e}")
 
-# --- SHARED WALLET & USER ACCESS CONTROL FUNCTIONS ---
+# --- USER ACCESS CONTROL FUNCTIONS ---
 async def add_allowed_user(target):
     data = load_data()
     target_str = str(target).lower().replace('@', '')
@@ -112,15 +112,6 @@ async def remove_allowed_user(target):
 
 async def get_allowed_users():
     return load_data().get("users", [])
-
-async def get_shared_wallet():
-    return load_data().get("shared_wallet", {"br_balance": 0.0, "ph_balance": 0.0})
-
-async def update_shared_wallet(br_amount=0.0, ph_amount=0.0):
-    data = load_data()
-    data["shared_wallet"]["br_balance"] = round(data["shared_wallet"].get("br_balance", 0.0) + float(br_amount), 2)
-    data["shared_wallet"]["ph_balance"] = round(data["shared_wallet"].get("ph_balance", 0.0) + float(ph_amount), 2)
-    save_data(data)
 # --------------------------------------
 
 async def get_main_cookie():
@@ -149,7 +140,7 @@ async def save_order(tg_id, game_id, zone_id, item_name, price, order_id, status
     }
     data["orders"].append(order_data)
     
-    # Keep only the latest 200 orders globally or per user (keeping per user limit)
+    # Auto-delete keeping max 200 orders
     user_orders = [o for o in data["orders"] if o.get("tg_id") == str(tg_id)]
     other_orders = [o for o in data["orders"] if o.get("tg_id") != str(tg_id)]
     
@@ -289,7 +280,7 @@ BR_PACKAGES = {
     'wp': [{'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}],
     'wp2': [{'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}],
     'wp3': [{'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}],
-    'wp4': [{'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}],
+    'wp4': [{'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}],
     'wp5': [{'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '16642', 'price': 76.0, 'name': 'Weekly Pass'}],
 }
 
@@ -333,7 +324,7 @@ MCC_PACKAGES = {
     'wp': [{'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}],
     'wp2': [{'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}],
     'wp3': [{'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}],
-    'wp4': [{'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}],
+    'wp4': [{'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}],
     'wp5': [{'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}, {'pid': '23841', 'price': 76.0, 'name': 'Weekly Pass'}],
 }
 
@@ -634,7 +625,7 @@ async def add_user_cmd(client, message: Message):
     
     target = parts[1].strip()
     if await add_allowed_user(target):
-        await message.reply(f"✅ User `{target}` has been allowed to use the shared wallet.")
+        await message.reply(f"✅ User `{target}` has been allowed to use the bot.")
     else:
         await message.reply(f"⚠️ User `{target}` is already in the allowed list.")
 
@@ -722,26 +713,17 @@ async def handle_raw_cookie_dump(client, message: Message):
 async def check_balance_command(client, message: Message):
     if not await is_authorized(message): return await message.reply("ɴᴏᴛ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜsᴇʀ.")
     
-    shared_wallet = await get_shared_wallet()
-    report = f"💳 **Sʜᴀʀᴇᴅ Wᴀʟʟᴇᴛ Bᴀʟᴀɴᴄᴇ:**\n\n"
-    report += f"🇧🇷 ʙʀ-ʙᴀʟᴀɴᴄᴇ  :  ${shared_wallet.get('br_balance', 0.00):,.2f}\n"
-    report += f"🇵🇭 ᴘʜ-ʙᴀʟᴀɴᴄᴇ  :  ${shared_wallet.get('ph_balance', 0.00):,.2f}\n\n"
-    
-    # Only Owner can see the real physical account balance to avoid confusing normal users
-    if message.from_user.id == OWNER_ID:
-        loading_msg = await message.reply("Fetching real balance from the official account...")
-        scraper = await get_main_scraper()
-        headers = {'X-Requested-With': 'XMLHttpRequest', 'Origin': 'https://www.smile.one'}
-        try:
-            balances = await get_smile_balance(scraper, headers, 'https://www.smile.one/customer/order')
-            report += f"💳 **Oғғɪᴄɪᴀʟ ᴀᴄᴄᴏᴜɴᴛ-ʙᴀʟᴀɴᴄᴇ:**\n\n"
-            report += f"🇧🇷 ʙʀ-ʙᴀʟᴀɴᴄᴇ  :  ${balances.get('br_balance', 0.00):,.2f}\n"
-            report += f"🇵🇭 ᴘʜ-ʙᴀʟᴀɴᴄᴇ  :  ${balances.get('ph_balance', 0.00):,.2f}"
-            await loading_msg.edit(report)
-        except Exception as e:
-            await loading_msg.edit(report + f"\n❌ Error fetching official balance: {str(e)}")
-    else:
-        await message.reply(report)
+    loading_msg = await message.reply("Fetching Official Balance...")
+    scraper = await get_main_scraper()
+    headers = {'X-Requested-With': 'XMLHttpRequest', 'Origin': 'https://www.smile.one'}
+    try:
+        balances = await get_smile_balance(scraper, headers, 'https://www.smile.one/customer/order')
+        report = f"💳 **Oғғɪᴄɪᴀʟ Aᴄᴄᴏᴜɴᴛ Bᴀʟᴀɴᴄᴇ:**\n\n"
+        report += f"🇧🇷 ʙʀ-ʙᴀʟᴀɴᴄᴇ  :  ${balances.get('br_balance', 0.00):,.2f}\n"
+        report += f"🇵🇭 ᴘʜ-ʙᴀʟᴀɴᴄᴇ  :  ${balances.get('ph_balance', 0.00):,.2f}"
+        await loading_msg.edit(report)
+    except Exception as e:
+        await loading_msg.edit(f"❌ Error fetching official balance: {str(e)}")
 
 
 # 📜 HISTORY COMMAND (.his / /history) 
@@ -778,7 +760,7 @@ async def send_order_history(client, message: Message):
     
     await message.reply_document(
         document=file_obj,
-        caption=f"<emoji id='{EMOJI_3}'>📊</emoji> **Order History**\n<emoji id='{EMOJI_1}'>📊</emoji> User: @{user_name}\n<emoji id='{EMOJI_2}'>📊</emoji> Records: {len(history_data)} (Max: 200)"
+        caption=f"<emoji id='{EMOJI_4}'>🆔</emoji> **Order History**\n<emoji id='{EMOJI_1}'>🆔</emoji> User: @{user_name}\n<emoji id='{EMOJI_2}'>🆔</emoji> Records: {len(history_data)} (Max: 200)"
     )
 
 # 🧹 CLEAN HISTORY COMMAND (.clean / /clean)
@@ -893,21 +875,16 @@ async def handle_topup(client, message: Message):
             else:
                 fmt_amount = int(added_amount) if added_amount % 1 == 0 else added_amount
                 
-                # Add to Shared Wallet
-                if active_region == 'BR':
-                    await update_shared_wallet(br_amount=added_amount)
-                else:
-                    await update_shared_wallet(ph_amount=added_amount)
-
-                new_wallet = await get_shared_wallet()
-                new_bal = new_wallet.get('br_balance' if active_region == 'BR' else 'ph_balance', 0.0)
+                # Retrieve Real Balance After Topup
+                new_bal_dict = await get_smile_balance(scraper, headers, 'https://www.smile.one/ph/customer/order' if active_region == 'PH' else 'https://www.smile.one/customer/order')
+                new_bal = new_bal_dict.get('br_balance' if active_region == 'BR' else 'ph_balance', 0.0)
 
                 msg = (
                     f"✅ <b>Code Top-Up Successful</b>\n\n"
                     f"<code>"
-                    f"Code   : {activation_code} ({active_region})\n"
-                    f"Added  : +{fmt_amount:,} 🪙\n"
-                    f"Total Shared Bal: {new_bal:,.2f} 🪙\n"
+                    f"Code       : {activation_code} ({active_region})\n"
+                    f"Added      : +{fmt_amount:,} 🪙\n"
+                    f"Official Bal: {new_bal:,.2f} 🪙\n"
                     f"</code>"
                 )
                 
@@ -1000,7 +977,7 @@ async def handle_check_role(client, message: Message):
         await loading_msg.edit(f"❌ System Error: {str(e)}")
 
 # ==========================================
-# 8. 💎 PURCHASE (SHARED WALLET SYSTEM)
+# 8. 💎 PURCHASE (OFFICIAL BALANCE SYSTEM)
 # ==========================================
 @app.on_message(filters.regex(r"(?i)^(?:msc|br|ph|mlb|mlp|b|p)\s+\d+"))
 async def handle_direct_buy(client, message: Message):
@@ -1052,20 +1029,26 @@ async def handle_direct_buy(client, message: Message):
                 items_to_buy = active_packages[item_input]
                 total_required_price = sum(item['price'] for item in items_to_buy)
                 
-                # Check Shared Wallet Balance First
-                shared_wallet = await get_shared_wallet()
-                current_bal = shared_wallet.get(v_bal_key, 0.0)
+                loading_msg = await message.reply(f"Fetching Official Balance...")
+                
+                # Get Initial Official Balance
+                scraper_bal = await get_main_scraper()
+                headers_bal = {'X-Requested-With': 'XMLHttpRequest', 'Origin': 'https://www.smile.one'}
+                bal_url = 'https://www.smile.one/ph/customer/order' if currency_name == 'PH' else 'https://www.smile.one/customer/order'
+                
+                initial_bal_dict = await get_smile_balance(scraper_bal, headers_bal, bal_url)
+                current_bal = initial_bal_dict.get(v_bal_key, 0.0)
                 
                 if current_bal < total_required_price:
                     error_text = (
-                        f"Nᴏᴛ ᴇɴᴏᴜɢʜ ᴍᴏɴᴇʏ ɪɴ sʜᴀʀᴇᴅ ᴡᴀʟʟᴇᴛ.\n"
-                        f"Nᴇᴇᴅ ʙᴀʟᴀɴᴄᴇ ᴀᴍᴏᴜɴᴛ: {total_required_price} {currency_name}\n"
+                        f"Nᴏᴛ ᴇɴᴏᴜɢʜ ᴍᴏɴᴇʏ ɪɴ Oғғɪᴄɪᴀʟ ᴀᴄᴄᴏᴜɴᴛ.\n"
+                        f"Nᴇᴇᴅ ʙᴀʟᴀɴᴄᴇ: {total_required_price} {currency_name}\n"
                         f"Cᴜʀʀᴇɴᴛ ʙᴀʟᴀɴᴄᴇ: {current_bal} {currency_name}"
                     )
-                    await message.reply(error_text)
+                    await loading_msg.edit(error_text)
                     continue
                 
-                loading_msg = await message.reply(f"Recharging Diam͟o͟n͟d͟ ● ᥫ᭡")
+                await loading_msg.edit(f"Recharging Diam͟o͟n͟d͟ ● ᥫ᭡")
                 
                 success_count = 0
                 fail_count = 0
@@ -1102,14 +1085,9 @@ async def handle_direct_buy(client, message: Message):
                     now = datetime.datetime.now(MMT)
                     date_str = now.strftime("%m/%d/%Y, %I:%M:%S %p")
                     
-                    # Deduct from shared wallet
-                    if currency_name == 'BR':
-                        await update_shared_wallet(br_amount=-total_spent)
-                    else:
-                        await update_shared_wallet(ph_amount=-total_spent)
-                        
-                    new_wallet = await get_shared_wallet()
-                    new_bal = new_wallet.get(v_bal_key, 0.0)
+                    # Get Final Official Balance
+                    final_bal_dict = await get_smile_balance(scraper_bal, headers_bal, bal_url)
+                    new_bal = final_bal_dict.get(v_bal_key, 0.0)
                     
                     final_order_ids = order_ids_str.strip().replace('\n', ', ')
                     
@@ -1125,7 +1103,6 @@ async def handle_direct_buy(client, message: Message):
                  
                     safe_ig_name = html.escape(str(ig_name))
                     safe_username = html.escape(str(username_display))
-                    
                     
                     report = (
                         f"<blockquote><code>=== ᴛʀᴀɴsᴀᴄᴛɪᴏɴ ʀᴇᴘᴏʀᴛ ===\n\n"
@@ -1154,7 +1131,7 @@ async def handle_direct_buy(client, message: Message):
         await message.reply(f"System Error: {str(e)}")
 
 
-# 🌟 NEW: 8.1 MAGIC CHESS (SHARED WALLET ဖြင့် ဝယ်ယူခြင်း) 🌟
+# 🌟 NEW: 8.1 MAGIC CHESS (OFFICIAL BALANCE ဖြင့် ဝယ်ယူခြင်း) 🌟
 
 @app.on_message(filters.regex(r"(?i)^mcc\s+\d+"))
 async def handle_mcc_buy(client, message: Message):
@@ -1190,19 +1167,26 @@ async def handle_mcc_buy(client, message: Message):
                 items_to_buy = MCC_PACKAGES[item_input]
                 total_required_price = sum(item['price'] for item in items_to_buy)
                 
-                shared_wallet = await get_shared_wallet()
-                current_bal = shared_wallet.get("br_balance", 0.0)
+                loading_msg = await message.reply(f"Fetching Official Balance...")
+                
+                # Get Initial Official Balance
+                scraper_bal = await get_main_scraper()
+                headers_bal = {'X-Requested-With': 'XMLHttpRequest', 'Origin': 'https://www.smile.one'}
+                bal_url = 'https://www.smile.one/customer/order'
+                
+                initial_bal_dict = await get_smile_balance(scraper_bal, headers_bal, bal_url)
+                current_bal = initial_bal_dict.get('br_balance', 0.0)
                 
                 if current_bal < total_required_price:
                     error_text = (
-                        f"Nᴏᴛ ᴇɴᴏᴜɢʜ ᴍᴏɴᴇʏ ɪɴ sʜᴀʀᴇᴅ ᴡᴀʟʟᴇᴛ.\n"
-                        f"Nᴇᴇᴅ ʙᴀʟᴀɴᴄᴇ ᴀᴍᴏᴜɴᴛ: {total_required_price} BR\n"
+                        f"Nᴏᴛ ᴇɴᴏᴜɢʜ ᴍᴏɴᴇʏ ɪɴ Oғғɪᴄɪᴀʟ ᴀᴄᴄᴏᴜɴᴛ.\n"
+                        f"Nᴇᴇᴅ ʙᴀʟᴀɴᴄᴇ: {total_required_price} BR\n"
                         f"Cᴜʀʀᴇɴᴛ ʙᴀʟᴀɴᴄᴇ: {current_bal} BR"
                     )
-                    await message.reply(error_text)
+                    await loading_msg.edit(error_text)
                     continue
                 
-                loading_msg = await message.reply(f"💻")
+                await loading_msg.edit(f"💻")
                 
                 success_count = 0
                 fail_count = 0
@@ -1239,10 +1223,9 @@ async def handle_mcc_buy(client, message: Message):
                     now = datetime.datetime.now(MMT)
                     date_str = now.strftime("%m/%d/%Y, %I:%M:%S %p")
                     
-                    # Deduct from shared wallet
-                    await update_shared_wallet(br_amount=-total_spent)
-                    new_wallet = await get_shared_wallet()
-                    new_bal = new_wallet.get("br_balance", 0.0)
+                    # Get Final Official Balance
+                    final_bal_dict = await get_smile_balance(scraper_bal, headers_bal, bal_url)
+                    new_bal = final_bal_dict.get('br_balance', 0.0)
                     
                     final_order_ids = order_ids_str.strip().replace('\n', ', ')
                     
@@ -1437,13 +1420,13 @@ async def send_help_message(client, message: Message):
 
     help_text += (
         f"<b>👤 𝐔𝐬𝐞𝐫 𝐓𝐨𝐨𝐥𝐬</b>\n"
-        f"🔹 <code>.balance</code>  : Check Shared Wallet Balance\n"
+        f"🔹 <code>.balance</code>  : Check Official Balance\n"
         f"🔹 <code>.his</code>      : View Order History\n"
         f"🔹 <code>.listb</code>     : View Price List\n"
         f"🔹 <code>.listp</code>     : View Price List\n"
         f"🔹 <code>.listmb</code>     : View Price List\n"
         f"🔹 <code>.role ID (Zone)</code> : Check IGN\n"
-        f"🔹 <code>.topup Code</code> : Redeem Voucher (Adds to Shared)\n\n"
+        f"🔹 <code>.topup Code</code> : Redeem Voucher\n\n"
     )
 
     if is_owner:
@@ -1520,5 +1503,5 @@ if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.create_task(keep_cookie_alive())
 
-    print("Bot is successfully running (With Shared Wallet & UI Match)...")
+    print("Bot is successfully running (Official Single Wallet System)...")
     app.run()
