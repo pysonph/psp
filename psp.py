@@ -1,4 +1,4 @@
-# wanglin.py (Updated: Uses database.json, No Reseller Balance, Added User Access Control)
+# wanglin.py (Updated: Single Shared Wallet System & UI Match)
 import io
 import os
 import re
@@ -47,26 +47,42 @@ app = Client(
 transaction_lock = asyncio.Lock()
 
 # ==========================================
-# 🗄️ LOCAL JSON DATABASE SETUP
+# 🗄️ LOCAL JSON DATABASE SETUP (SHARED WALLET)
 # ==========================================
 DB_FILE = 'database.json'
 
 def load_data():
     if not os.path.exists(DB_FILE):
-        return {"users": [str(OWNER_ID)], "cookie": "", "orders": []}
+        return {
+            "users": [str(OWNER_ID)], 
+            "shared_wallet": {"br_balance": 0.0, "ph_balance": 0.0}, 
+            "cookie": "", 
+            "orders": []
+        }
     try:
         with open(DB_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
-        # Ensure 'users' key exists
+        # Migrate old Dict format to List format for users
+        if "users" in data and isinstance(data["users"], dict):
+            data["users"] = list(data["users"].keys())
+            save_data(data)
+            
         if "users" not in data:
             data["users"] = [str(OWNER_ID)]
+        if "shared_wallet" not in data:
+            data["shared_wallet"] = {"br_balance": 0.0, "ph_balance": 0.0}
         if "orders" not in data:
             data["orders"] = []
             
         return data
     except Exception:
-        return {"users": [str(OWNER_ID)], "cookie": "", "orders": []}
+        return {
+            "users": [str(OWNER_ID)], 
+            "shared_wallet": {"br_balance": 0.0, "ph_balance": 0.0}, 
+            "cookie": "", 
+            "orders": []
+        }
 
 def save_data(data):
     try:
@@ -75,11 +91,11 @@ def save_data(data):
     except Exception as e:
         print(f"❌ Error saving database: {e}")
 
-# --- USER ACCESS CONTROL FUNCTIONS ---
+# --- SHARED WALLET & USER ACCESS CONTROL FUNCTIONS ---
 async def add_allowed_user(target):
     data = load_data()
     target_str = str(target).lower().replace('@', '')
-    if target_str not in data.get("users", []):
+    if target_str not in data["users"]:
         data["users"].append(target_str)
         save_data(data)
         return True
@@ -88,7 +104,7 @@ async def add_allowed_user(target):
 async def remove_allowed_user(target):
     data = load_data()
     target_str = str(target).lower().replace('@', '')
-    if target_str in data.get("users", []):
+    if target_str in data["users"]:
         data["users"].remove(target_str)
         save_data(data)
         return True
@@ -96,6 +112,15 @@ async def remove_allowed_user(target):
 
 async def get_allowed_users():
     return load_data().get("users", [])
+
+async def get_shared_wallet():
+    return load_data().get("shared_wallet", {"br_balance": 0.0, "ph_balance": 0.0})
+
+async def update_shared_wallet(br_amount=0.0, ph_amount=0.0):
+    data = load_data()
+    data["shared_wallet"]["br_balance"] = round(data["shared_wallet"].get("br_balance", 0.0) + float(br_amount), 2)
+    data["shared_wallet"]["ph_balance"] = round(data["shared_wallet"].get("ph_balance", 0.0) + float(ph_amount), 2)
+    save_data(data)
 # --------------------------------------
 
 async def get_main_cookie():
@@ -110,6 +135,7 @@ async def save_order(tg_id, game_id, zone_id, item_name, price, order_id, status
     data = load_data()
     if "orders" not in data: data["orders"] = []
     now = datetime.datetime.now(MMT)
+    
     order_data = {
         "tg_id": str(tg_id),
         "game_id": str(game_id),
@@ -122,9 +148,19 @@ async def save_order(tg_id, game_id, zone_id, item_name, price, order_id, status
         "timestamp": now.timestamp()
     }
     data["orders"].append(order_data)
+    
+    # Keep only the latest 200 orders globally or per user (keeping per user limit)
+    user_orders = [o for o in data["orders"] if o.get("tg_id") == str(tg_id)]
+    other_orders = [o for o in data["orders"] if o.get("tg_id") != str(tg_id)]
+    
+    if len(user_orders) > 200:
+        user_orders.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+        user_orders = user_orders[:200]
+        
+    data["orders"] = other_orders + user_orders
     save_data(data)
 
-async def get_user_history(tg_id, limit=500):
+async def get_user_history(tg_id, limit=200):
     data = load_data()
     orders = data.get("orders", [])
     user_orders = [o for o in orders if o.get("tg_id") == str(tg_id)]
@@ -329,9 +365,12 @@ async def get_smile_balance(scraper, headers, balance_url='https://www.smile.one
     return balances
 
 # ==========================================
-# 3. SMILE.ONE SCRAPER FUNCTION (MLBB) [FULLY ASYNC]
+# 3. SMILE.ONE SCRAPER FUNCTION (MLBB) [FULLY ASYNC & FIXED FALSE POSITIVE]
 # ==========================================
-async def process_smile_one_order(game_id, zone_id, product_id, currency_name):
+async def process_smile_one_order(game_id, zone_id, product_id, currency_name, seen_order_ids=None):
+    if seen_order_ids is None:
+        seen_order_ids = []
+        
     scraper = await get_main_scraper()
 
     if currency_name == 'PH':
@@ -394,54 +433,64 @@ async def process_smile_one_order(game_id, zone_id, product_id, currency_name):
                 success = await auto_login_and_get_cookie()
                 if success: return {"status": "error", "message": "Session renewed. Please enter the command again."}
                 else: return {"status": "error", "message": "❌ Auto-Login failed. Please provide /setcookie again."}
-            return {"status": "error", "message": "❌ **Invalid Account:**\nAccount is ban server."}
+            return {"status": "error", "message": f"❌ **Invalid Account/Server:** {real_error}"}
 
         pay_data = {'_csrf': csrf_token, 'user_id': game_id, 'zone_id': zone_id, 'pay_methond': 'smilecoin', 'product_id': product_id, 'channel_method': 'smilecoin', 'flowid': flowid, 'email': '', 'coupon_id': ''}
         pay_response_raw = await asyncio.to_thread(scraper.post, pay_url, data=pay_data, headers=headers)
-        pay_text = pay_response_raw.text.lower()
         
-        if "saldo insuficiente" in pay_text or "insufficient" in pay_text:
-            return {"status": "error", "message": "Insufficient balance in the Main account."}
-        
-        await asyncio.sleep(2) 
-        real_order_id = "Not found"
         is_success = False
-
+        real_order_id = "Not found"
+        
         try:
-            hist_res_raw = await asyncio.to_thread(scraper.get, order_api_url, params={'type': 'orderlist', 'p': '1', 'pageSize': '5'}, headers=headers)
-            hist_json = hist_res_raw.json()
-            if 'list' in hist_json and len(hist_json['list']) > 0:
-                for order in hist_json['list']:
-                    if str(order.get('user_id')) == str(game_id) and str(order.get('server_id')) == str(zone_id):
-                        if str(order.get('order_status', '')).lower() == 'success' or str(order.get('status')) == '1':
-                            real_order_id = str(order.get('increment_id', "Not found"))
-                            is_success = True
-                            break
-        except Exception: pass
+            pay_json = pay_response_raw.json()
+            code = str(pay_json.get('code', pay_json.get('status', '')))
+            msg = str(pay_json.get('msg', pay_json.get('message', ''))).lower()
+            
+            if code in ['200', '0', '1'] or 'success' in msg:
+                is_success = True
+                real_order_id = str(pay_json.get('data', {}).get('order_id', 'Not found'))
+            else:
+                err_text = pay_json.get('msg', 'Insufficient balance or API Error')
+                return {"status": "error", "message": f"Payment Failed: {err_text}"}
+        except Exception:
+            pay_text = pay_response_raw.text.lower()
+            if 'success' in pay_text or 'sucesso' in pay_text:
+                is_success = True
+            else:
+                return {"status": "error", "message": "Payment Failed: Insufficient balance or Blocked."}
 
-        if not is_success:
+        if is_success and real_order_id in ["Not found", "", "None"]:
+            await asyncio.sleep(2) 
             try:
-                pay_json = pay_response_raw.json()
-                code = str(pay_json.get('code', ''))
-                msg = str(pay_json.get('msg', '')).lower()
-                if code in ['200', '0', '1'] or 'success' in msg: is_success = True
-            except:
-                if 'success' in pay_text or 'sucesso' in pay_text: is_success = True
+                hist_res_raw = await asyncio.to_thread(scraper.get, order_api_url, params={'type': 'orderlist', 'p': '1', 'pageSize': '5'}, headers=headers)
+                hist_json = hist_res_raw.json()
+                if 'list' in hist_json and len(hist_json['list']) > 0:
+                    for order in hist_json['list']:
+                        increment_id = str(order.get('increment_id', ''))
+                        
+                        if increment_id in seen_order_ids:
+                            continue
+                            
+                        if str(order.get('user_id')) == str(game_id) and str(order.get('server_id')) == str(zone_id):
+                            if str(order.get('order_status', '')).lower() == 'success' or str(order.get('status')) == '1':
+                                real_order_id = increment_id
+                                break
+            except Exception: pass
 
         if is_success:
+            if real_order_id in ["Not found", "", "None"]:
+                real_order_id = f"AUTO_{int(time.time())}"
             return {"status": "success", "ig_name": ig_name, "order_id": real_order_id}
         else:
-            err_msg = "Payment failed."
-            try:
-                err_json = pay_response_raw.json()
-                if 'msg' in err_json: err_msg = f"Payment failed. ({err_json['msg']})"
-            except: pass
-            return {"status": "error", "message": err_msg}
+            return {"status": "error", "message": "Payment failed (Unknown Error)."}
 
     except Exception as e: return {"status": "error", "message": f"System Error: {str(e)}"}
 
-# 🌟 NEW: 3.1 MAGIC CHESS SCRAPER FUNCTION [FULLY ASYNC] 🌟
-async def process_mcc_order(game_id, zone_id, product_id):
+# 🌟 NEW: 3.1 MAGIC CHESS SCRAPER FUNCTION [FULLY ASYNC & FIXED FALSE POSITIVE] 🌟
+async def process_mcc_order(game_id, zone_id, product_id, seen_order_ids=None):
+    if seen_order_ids is None:
+        seen_order_ids = []
+        
     scraper = await get_main_scraper()
 
     main_url = 'https://www.smile.one/br/merchant/game/magicchessgogo'
@@ -500,45 +549,52 @@ async def process_mcc_order(game_id, zone_id, product_id):
 
         pay_data = {'_csrf': csrf_token, 'user_id': game_id, 'zone_id': zone_id, 'pay_methond': 'smilecoin', 'product_id': product_id, 'channel_method': 'smilecoin', 'flowid': flowid, 'email': '', 'coupon_id': ''}
         pay_response_raw = await asyncio.to_thread(scraper.post, pay_url, data=pay_data, headers=headers)
-        pay_text = pay_response_raw.text.lower()
         
-        if "saldo insuficiente" in pay_text or "insufficient" in pay_text:
-            return {"status": "error", "message": "Insufficient balance in the Main account."}
-        
-        await asyncio.sleep(2) 
-        real_order_id = "Not found"
         is_success = False
-
+        real_order_id = "Not found"
+        
         try:
-            hist_res_raw = await asyncio.to_thread(scraper.get, order_api_url, params={'type': 'orderlist', 'p': '1', 'pageSize': '5'}, headers=headers)
-            hist_json = hist_res_raw.json()
-            if 'list' in hist_json and len(hist_json['list']) > 0:
-                for order in hist_json['list']:
-                    if str(order.get('user_id')) == str(game_id) and str(order.get('server_id')) == str(zone_id):
-                        if str(order.get('order_status', '')).lower() == 'success' or str(order.get('status')) == '1':
-                            real_order_id = str(order.get('increment_id', "Not found"))
-                            is_success = True
-                            break
-        except Exception: pass
+            pay_json = pay_response_raw.json()
+            code = str(pay_json.get('code', pay_json.get('status', '')))
+            msg = str(pay_json.get('msg', pay_json.get('message', ''))).lower()
+            
+            if code in ['200', '0', '1'] or 'success' in msg:
+                is_success = True
+                real_order_id = str(pay_json.get('data', {}).get('order_id', 'Not found'))
+            else:
+                err_text = pay_json.get('msg', 'Insufficient balance or API Error')
+                return {"status": "error", "message": f"Payment Failed: {err_text}"}
+        except Exception:
+            pay_text = pay_response_raw.text.lower()
+            if 'success' in pay_text or 'sucesso' in pay_text:
+                is_success = True
+            else:
+                return {"status": "error", "message": "Payment Failed: Insufficient balance or Blocked."}
 
-        if not is_success:
+        if is_success and real_order_id in ["Not found", "", "None"]:
+            await asyncio.sleep(2) 
             try:
-                pay_json = pay_response_raw.json()
-                code = str(pay_json.get('code', ''))
-                msg = str(pay_json.get('msg', '')).lower()
-                if code in ['200', '0', '1'] or 'success' in msg: is_success = True
-            except:
-                if 'success' in pay_text or 'sucesso' in pay_text: is_success = True
+                hist_res_raw = await asyncio.to_thread(scraper.get, order_api_url, params={'type': 'orderlist', 'p': '1', 'pageSize': '5'}, headers=headers)
+                hist_json = hist_res_raw.json()
+                if 'list' in hist_json and len(hist_json['list']) > 0:
+                    for order in hist_json['list']:
+                        increment_id = str(order.get('increment_id', ''))
+                        
+                        if increment_id in seen_order_ids:
+                            continue
+                            
+                        if str(order.get('user_id')) == str(game_id) and str(order.get('server_id')) == str(zone_id):
+                            if str(order.get('order_status', '')).lower() == 'success' or str(order.get('status')) == '1':
+                                real_order_id = increment_id
+                                break
+            except Exception: pass
 
         if is_success:
+            if real_order_id in ["Not found", "", "None"]:
+                real_order_id = f"AUTO_{int(time.time())}"
             return {"status": "success", "ig_name": ig_name, "order_id": real_order_id}
         else:
-            err_msg = "Payment failed."
-            try:
-                err_json = pay_response_raw.json()
-                if 'msg' in err_json: err_msg = f"Payment failed. ({err_json['msg']})"
-            except: pass
-            return {"status": "error", "message": err_msg}
+            return {"status": "error", "message": "Payment failed."}
 
     except Exception as e: return {"status": "error", "message": f"System Error: {str(e)}"}
 
@@ -578,7 +634,7 @@ async def add_user_cmd(client, message: Message):
     
     target = parts[1].strip()
     if await add_allowed_user(target):
-        await message.reply(f"✅ User `{target}` has been allowed to use the bot.")
+        await message.reply(f"✅ User `{target}` has been allowed to use the shared wallet.")
     else:
         await message.reply(f"⚠️ User `{target}` is already in the allowed list.")
 
@@ -666,17 +722,26 @@ async def handle_raw_cookie_dump(client, message: Message):
 async def check_balance_command(client, message: Message):
     if not await is_authorized(message): return await message.reply("ɴᴏᴛ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜsᴇʀ.")
     
-    loading_msg = await message.reply("Fetching real balance from the official account...")
-    scraper = await get_main_scraper()
-    headers = {'X-Requested-With': 'XMLHttpRequest', 'Origin': 'https://www.smile.one'}
-    try:
-        balances = await get_smile_balance(scraper, headers, 'https://www.smile.one/customer/order')
-        report = f"💳 **Oғғɪᴄɪᴀʟ ᴀᴄᴄᴏᴜɴᴛ-ʙᴀʟᴀɴᴄᴇ:**\n\n"
-        report += f"🇧🇷 ʙʀ-ʙᴀʟᴀɴᴄᴇ  :  ${balances.get('br_balance', 0.00):,.2f}\n"
-        report += f"🇵🇭 ᴘʜ-ʙᴀʟᴀɴᴄᴇ  :  ${balances.get('ph_balance', 0.00):,.2f}"
-        await loading_msg.edit(report)
-    except Exception as e:
-        await loading_msg.edit(f"❌ Error fetching balance: {str(e)}")
+    shared_wallet = await get_shared_wallet()
+    report = f"💳 **Sʜᴀʀᴇᴅ Wᴀʟʟᴇᴛ Bᴀʟᴀɴᴄᴇ:**\n\n"
+    report += f"🇧🇷 ʙʀ-ʙᴀʟᴀɴᴄᴇ  :  ${shared_wallet.get('br_balance', 0.00):,.2f}\n"
+    report += f"🇵🇭 ᴘʜ-ʙᴀʟᴀɴᴄᴇ  :  ${shared_wallet.get('ph_balance', 0.00):,.2f}\n\n"
+    
+    # Only Owner can see the real physical account balance to avoid confusing normal users
+    if message.from_user.id == OWNER_ID:
+        loading_msg = await message.reply("Fetching real balance from the official account...")
+        scraper = await get_main_scraper()
+        headers = {'X-Requested-With': 'XMLHttpRequest', 'Origin': 'https://www.smile.one'}
+        try:
+            balances = await get_smile_balance(scraper, headers, 'https://www.smile.one/customer/order')
+            report += f"💳 **Oғғɪᴄɪᴀʟ ᴀᴄᴄᴏᴜɴᴛ-ʙᴀʟᴀɴᴄᴇ:**\n\n"
+            report += f"🇧🇷 ʙʀ-ʙᴀʟᴀɴᴄᴇ  :  ${balances.get('br_balance', 0.00):,.2f}\n"
+            report += f"🇵🇭 ᴘʜ-ʙᴀʟᴀɴᴄᴇ  :  ${balances.get('ph_balance', 0.00):,.2f}"
+            await loading_msg.edit(report)
+        except Exception as e:
+            await loading_msg.edit(report + f"\n❌ Error fetching official balance: {str(e)}")
+    else:
+        await message.reply(report)
 
 
 # 📜 HISTORY COMMAND (.his / /history) 
@@ -713,7 +778,7 @@ async def send_order_history(client, message: Message):
     
     await message.reply_document(
         document=file_obj,
-        caption=f"📜 **Order History**\n👤 User: @{user_name}\n📊 Records: {len(history_data)} (Max: 200)"
+        caption=f"<emoji id='{EMOJI_3}'>📊</emoji> **Order History**\n<emoji id='{EMOJI_1}'>📊</emoji> User: @{user_name}\n<emoji id='{EMOJI_2}'>📊</emoji> Records: {len(history_data)} (Max: 200)"
     )
 
 # 🧹 CLEAN HISTORY COMMAND (.clean / /clean)
@@ -827,12 +892,22 @@ async def handle_topup(client, message: Message):
                 await loading_msg.edit(f"sᴍɪʟᴇ ᴏɴᴇ ʀᴇᴅᴇᴇᴍ ᴄᴏᴅᴇ sᴜᴄᴄᴇss ✅\n(Cannot retrieve exact amount due to System Delay.)")
             else:
                 fmt_amount = int(added_amount) if added_amount % 1 == 0 else added_amount
+                
+                # Add to Shared Wallet
+                if active_region == 'BR':
+                    await update_shared_wallet(br_amount=added_amount)
+                else:
+                    await update_shared_wallet(ph_amount=added_amount)
+
+                new_wallet = await get_shared_wallet()
+                new_bal = new_wallet.get('br_balance' if active_region == 'BR' else 'ph_balance', 0.0)
 
                 msg = (
                     f"✅ <b>Code Top-Up Successful</b>\n\n"
                     f"<code>"
                     f"Code   : {activation_code} ({active_region})\n"
                     f"Added  : +{fmt_amount:,} 🪙\n"
+                    f"Total Shared Bal: {new_bal:,.2f} 🪙\n"
                     f"</code>"
                 )
                 
@@ -925,7 +1000,7 @@ async def handle_check_role(client, message: Message):
         await loading_msg.edit(f"❌ System Error: {str(e)}")
 
 # ==========================================
-# 8. 💎 PURCHASE (AUTO REGION DETECT)
+# 8. 💎 PURCHASE (SHARED WALLET SYSTEM)
 # ==========================================
 @app.on_message(filters.regex(r"(?i)^(?:msc|br|ph|mlb|mlp|b|p)\s+\d+"))
 async def handle_direct_buy(client, message: Message):
@@ -956,21 +1031,39 @@ async def handle_direct_buy(client, message: Message):
                 
                 currency_name = ''
                 active_packages = {}
+                v_bal_key = ''
 
                 if item_input in DOUBLE_DIAMOND_PACKAGES:
                     currency_name = 'BR'
                     active_packages = DOUBLE_DIAMOND_PACKAGES
+                    v_bal_key = 'br_balance'
                 elif item_input in BR_PACKAGES:
                     currency_name = 'BR'
                     active_packages = BR_PACKAGES
+                    v_bal_key = 'br_balance'
                 elif item_input in PH_PACKAGES:
                     currency_name = 'PH'
                     active_packages = PH_PACKAGES
+                    v_bal_key = 'ph_balance'
                 else:
                     await message.reply(f"❌ No Package found for the selected '{item_input}'.")
                     continue
                     
                 items_to_buy = active_packages[item_input]
+                total_required_price = sum(item['price'] for item in items_to_buy)
+                
+                # Check Shared Wallet Balance First
+                shared_wallet = await get_shared_wallet()
+                current_bal = shared_wallet.get(v_bal_key, 0.0)
+                
+                if current_bal < total_required_price:
+                    error_text = (
+                        f"Nᴏᴛ ᴇɴᴏᴜɢʜ ᴍᴏɴᴇʏ ɪɴ sʜᴀʀᴇᴅ ᴡᴀʟʟᴇᴛ.\n"
+                        f"Nᴇᴇᴅ ʙᴀʟᴀɴᴄᴇ ᴀᴍᴏᴜɴᴛ: {total_required_price} {currency_name}\n"
+                        f"Cᴜʀʀᴇɴᴛ ʙᴀʟᴀɴᴄᴇ: {current_bal} {currency_name}"
+                    )
+                    await message.reply(error_text)
+                    continue
                 
                 loading_msg = await message.reply(f"Recharging Diam͟o͟n͟d͟ ● ᥫ᭡")
                 
@@ -982,8 +1075,10 @@ async def handle_direct_buy(client, message: Message):
                 error_msg = ""
                 first_order = True
                 
+                seen_order_ids = []
+                
                 for item in items_to_buy:
-                    result = await process_smile_one_order(game_id, zone_id, item['pid'], currency_name)
+                    result = await process_smile_one_order(game_id, zone_id, item['pid'], currency_name, seen_order_ids)
                     
                     if result['status'] == 'success':
                         if first_order:
@@ -992,7 +1087,10 @@ async def handle_direct_buy(client, message: Message):
                         
                         success_count += 1
                         total_spent += item['price']
-                        order_ids_str += f"{result['order_id']}\n" 
+                        
+                        order_id = result['order_id']
+                        seen_order_ids.append(order_id)
+                        order_ids_str += f"{order_id}\n" 
                         
                         await asyncio.sleep(random.randint(2, 5)) 
                     else:
@@ -1003,6 +1101,15 @@ async def handle_direct_buy(client, message: Message):
                 if success_count > 0:
                     now = datetime.datetime.now(MMT)
                     date_str = now.strftime("%m/%d/%Y, %I:%M:%S %p")
+                    
+                    # Deduct from shared wallet
+                    if currency_name == 'BR':
+                        await update_shared_wallet(br_amount=-total_spent)
+                    else:
+                        await update_shared_wallet(ph_amount=-total_spent)
+                        
+                    new_wallet = await get_shared_wallet()
+                    new_bal = new_wallet.get(v_bal_key, 0.0)
                     
                     final_order_ids = order_ids_str.strip().replace('\n', ', ')
                     
@@ -1019,16 +1126,20 @@ async def handle_direct_buy(client, message: Message):
                     safe_ig_name = html.escape(str(ig_name))
                     safe_username = html.escape(str(username_display))
                     
+                    
                     report = (
-                        f"<blockquote><code>=== ᴛʀᴀɴꜱᴀᴄᴛɪᴏɴ ʀᴇᴘᴏʀᴛ ===\n\n"
+                        f"<blockquote><code>=== ᴛʀᴀɴsᴀᴄᴛɪᴏɴ ʀᴇᴘᴏʀᴛ ===\n\n"
                         f"ᴏʀᴅᴇʀ sᴛᴀᴛᴜs : ✅ Sᴜᴄᴄᴇss\n"
                         f"ɢᴀᴍᴇ ɪᴅ      : {game_id} {zone_id}\n"
                         f"ɪɢ ɴᴀᴍᴇ      : {safe_ig_name}\n"
                         f"sᴇʀɪᴀʟ       :\n{order_ids_str.strip()}\n"
-                        f"ɪᴛᴇᴍ         : {item_input} 💎\n\n"
+                        f"ɪᴛᴇᴍ         : {item_input} 💎\n"
+                        f"sᴘᴇɴᴛ        : {total_spent:.2f} 🪙\n\n"
                         f"ᴅᴀᴛᴇ         : {date_str}\n"
                         f"ᴜsᴇʀɴᴀᴍᴇ     : {safe_username}\n"
-                        f"ᴛᴏᴛᴀʟ sᴘᴇɴᴛ  : ${total_spent:.2f}\n\n"
+                        f"sᴘᴇɴᴛ        : ${total_spent:.2f}\n"
+                        f"ɪɴɪᴛɪᴀʟ      : ${current_bal:,.2f}\n"
+                        f"ғɪɴᴀʟ        : ${new_bal:,.2f}\n\n"
                         f"Sᴜᴄᴄᴇss {success_count} / Fᴀɪʟ {fail_count}</code></blockquote>"
                     )
 
@@ -1043,7 +1154,7 @@ async def handle_direct_buy(client, message: Message):
         await message.reply(f"System Error: {str(e)}")
 
 
-# 🌟 NEW: 8.1 MAGIC CHESS V-WALLET ဖြင့် ဝယ်ယူခြင်း 🌟
+# 🌟 NEW: 8.1 MAGIC CHESS (SHARED WALLET ဖြင့် ဝယ်ယူခြင်း) 🌟
 
 @app.on_message(filters.regex(r"(?i)^mcc\s+\d+"))
 async def handle_mcc_buy(client, message: Message):
@@ -1077,6 +1188,19 @@ async def handle_mcc_buy(client, message: Message):
                     continue
                     
                 items_to_buy = MCC_PACKAGES[item_input]
+                total_required_price = sum(item['price'] for item in items_to_buy)
+                
+                shared_wallet = await get_shared_wallet()
+                current_bal = shared_wallet.get("br_balance", 0.0)
+                
+                if current_bal < total_required_price:
+                    error_text = (
+                        f"Nᴏᴛ ᴇɴᴏᴜɢʜ ᴍᴏɴᴇʏ ɪɴ sʜᴀʀᴇᴅ ᴡᴀʟʟᴇᴛ.\n"
+                        f"Nᴇᴇᴅ ʙᴀʟᴀɴᴄᴇ ᴀᴍᴏᴜɴᴛ: {total_required_price} BR\n"
+                        f"Cᴜʀʀᴇɴᴛ ʙᴀʟᴀɴᴄᴇ: {current_bal} BR"
+                    )
+                    await message.reply(error_text)
+                    continue
                 
                 loading_msg = await message.reply(f"💻")
                 
@@ -1088,8 +1212,10 @@ async def handle_mcc_buy(client, message: Message):
                 error_msg = ""
                 first_order = True
                 
+                seen_order_ids = []
+                
                 for item in items_to_buy:
-                    result = await process_mcc_order(game_id, zone_id, item['pid'])
+                    result = await process_mcc_order(game_id, zone_id, item['pid'], seen_order_ids)
                     
                     if result['status'] == 'success':
                         if first_order:
@@ -1098,7 +1224,10 @@ async def handle_mcc_buy(client, message: Message):
                         
                         success_count += 1
                         total_spent += item['price']
-                        order_ids_str += f"{result['order_id']}\n"
+                        
+                        order_id = result['order_id']
+                        seen_order_ids.append(order_id)
+                        order_ids_str += f"{order_id}\n"
                         
                         await asyncio.sleep(random.randint(5, 10)) 
                     else:
@@ -1109,6 +1238,11 @@ async def handle_mcc_buy(client, message: Message):
                 if success_count > 0:
                     now = datetime.datetime.now(MMT)
                     date_str = now.strftime("%m/%d/%Y, %I:%M:%S %p")
+                    
+                    # Deduct from shared wallet
+                    await update_shared_wallet(br_amount=-total_spent)
+                    new_wallet = await get_shared_wallet()
+                    new_bal = new_wallet.get("br_balance", 0.0)
                     
                     final_order_ids = order_ids_str.strip().replace('\n', ', ')
                     
@@ -1128,15 +1262,18 @@ async def handle_mcc_buy(client, message: Message):
                     report = (
                         f"<blockquote><code>**MCC {game_id} ({zone_id}) {item_input}**\n"
                         f"=== ᴛʀᴀɴsᴀᴄᴛɪᴏɴ ʀᴇᴘᴏʀᴛ ===\n\n"
-                        f"ᴏʀᴅᴇʀ sᴛᴀᴛᴜs: ✅ Sᴜᴄᴄᴇss\n"
-                        f"ɢᴀᴍᴇ: ᴍᴀɢɪᴄ ᴄʜᴇss ɢᴏ ɢᴏ\n"
-                        f"ɢᴀᴍᴇ ɪᴅ: {game_id} {zone_id}\n"
-                        f"ɪɢ ɴᴀᴍᴇ: {safe_ig_name}\n"
-                        f"ᴏʀᴅᴇʀ ɪᴅ:\n{order_ids_str.strip()}\n"
-                        f"ɪᴛᴇᴍ: {item_input} 💎\n\n"
-                        f"ᴅᴀᴛᴇ: {date_str}\n"
-                        f"ᴜsᴇʀɴᴀᴍᴇ: {safe_username}\n"
-                        f"ᴛᴏᴛᴀʟ sᴘᴇɴᴛ: ${total_spent:.2f}\n\n"
+                        f"ᴏʀᴅᴇʀ sᴛᴀᴛᴜs : ✅ Sᴜᴄᴄᴇss\n"
+                        f"ɢᴀᴍᴇ         : ᴍᴀɢɪᴄ ᴄʜᴇss ɢᴏ ɢᴏ\n"
+                        f"ɢᴀᴍᴇ ɪᴅ      : {game_id} {zone_id}\n"
+                        f"ɪɢ ɴᴀᴍᴇ      : {safe_ig_name}\n"
+                        f"ᴏʀᴅᴇʀ ɪᴅ     :\n{order_ids_str.strip()}\n"
+                        f"ɪᴛᴇᴍ         : {item_input} 💎\n"
+                        f"sᴘᴇɴᴛ        : {total_spent:.2f} 🪙\n\n"
+                        f"ᴅᴀᴛᴇ         : {date_str}\n"
+                        f"ᴜsᴇʀɴᴀᴍᴇ     : {safe_username}\n"
+                        f"sᴘᴇɴᴛ        : ${total_spent:.2f}\n"
+                        f"ɪɴɪᴛɪᴀʟ      : ${current_bal:,.2f}\n"
+                        f"ғɪɴᴀʟ        : ${new_bal:,.2f}\n\n"
                         f"Sᴜᴄᴄᴇss {success_count} / Fᴀɪʟ {fail_count}</code></blockquote>" 
                     )
 
@@ -1300,13 +1437,13 @@ async def send_help_message(client, message: Message):
 
     help_text += (
         f"<b>👤 𝐔𝐬𝐞𝐫 𝐓𝐨𝐨𝐥𝐬</b>\n"
-        f"🔹 <code>.balance</code>  : Check Wallet Balance\n"
+        f"🔹 <code>.balance</code>  : Check Shared Wallet Balance\n"
         f"🔹 <code>.his</code>      : View Order History\n"
         f"🔹 <code>.listb</code>     : View Price List\n"
         f"🔹 <code>.listp</code>     : View Price List\n"
         f"🔹 <code>.listmb</code>     : View Price List\n"
         f"🔹 <code>.role ID (Zone)</code> : Check IGN\n"
-        f"🔹 <code>.topup Code</code> : Redeem Voucher\n\n"
+        f"🔹 <code>.topup Code</code> : Redeem Voucher (Adds to Shared)\n\n"
     )
 
     if is_owner:
@@ -1383,5 +1520,5 @@ if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.create_task(keep_cookie_alive())
 
-    print("Bot is successfully running (With User Auth & database.json)...")
+    print("Bot is successfully running (With Shared Wallet & UI Match)...")
     app.run()
