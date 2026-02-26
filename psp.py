@@ -431,51 +431,57 @@ async def process_smile_one_order(game_id, zone_id, product_id, currency_name, s
         
         is_success = False
         real_order_id = "Not found"
+        err_text = "Unknown Error"
         
         try:
             pay_json = pay_response_raw.json()
             code = str(pay_json.get('code', pay_json.get('status', '')))
             msg = str(pay_json.get('msg', pay_json.get('message', ''))).lower()
             
-            if code in ['200', '0', '1'] or 'success' in msg:
+            # Code 200, 0, 1 (သို့) message ထဲမှာ success ပါရင် အောင်မြင်တယ်လို့ ယူဆပါတယ်
+            if code in ['200', '0', '1'] or 'success' in msg or 'sucesso' in msg or 'ok' in msg:
                 is_success = True
                 real_order_id = str(pay_json.get('data', {}).get('order_id', 'Not found'))
             else:
                 err_text = pay_json.get('msg', 'Insufficient balance or API Error')
-                return {"status": "error", "message": f"Payment Failed: {err_text}"}
         except Exception:
             pay_text = pay_response_raw.text.lower()
-            if 'success' in pay_text or 'sucesso' in pay_text:
+            if 'success' in pay_text or 'sucesso' in pay_text or 'ok' in pay_text:
                 is_success = True
             else:
-                return {"status": "error", "message": "Payment Failed: Insufficient balance or Blocked."}
+                err_text = "Insufficient balance, Timeout or Blocked."
 
-        if is_success and real_order_id in ["Not found", "", "None"]:
-            await asyncio.sleep(2) 
-            try:
-                hist_res_raw = await asyncio.to_thread(scraper.get, order_api_url, params={'type': 'orderlist', 'p': '1', 'pageSize': '5'}, headers=headers)
-                hist_json = hist_res_raw.json()
-                if 'list' in hist_json and len(hist_json['list']) > 0:
-                    for order in hist_json['list']:
-                        increment_id = str(order.get('increment_id', ''))
+        # 🚨 NEW SAFETY NET: ပိုက်ဆံဖြတ်ပြီး Error ပြနေရင်တောင် History ကို ထပ်စစ်ပါမယ် 🚨
+        await asyncio.sleep(2) 
+        try:
+            hist_res_raw = await asyncio.to_thread(scraper.get, order_api_url, params={'type': 'orderlist', 'p': '1', 'pageSize': '5'}, headers=headers)
+            hist_json = hist_res_raw.json()
+            if 'list' in hist_json and len(hist_json['list']) > 0:
+                for order in hist_json['list']:
+                    increment_id = str(order.get('increment_id', ''))
+                    
+                    # အရင်ဝယ်ပြီးသား ID တွေကို ကျော်ပါမယ်
+                    if increment_id in seen_order_ids:
+                        continue
                         
-                        if increment_id in seen_order_ids:
-                            continue
-                            
-                        if str(order.get('user_id')) == str(game_id) and str(order.get('server_id')) == str(zone_id):
-                            if str(order.get('order_status', '')).lower() == 'success' or str(order.get('status')) == '1':
-                                real_order_id = increment_id
-                                break
-            except Exception: pass
+                    # အခု ID နဲ့ ကိုက်ပြီး Success ဖြစ်နေရင် အောင်မြင်ပါတယ်
+                    if str(order.get('user_id')) == str(game_id) and str(order.get('server_id')) == str(zone_id):
+                        if str(order.get('order_status', '')).lower() == 'success' or str(order.get('status')) == '1':
+                            is_success = True
+                            real_order_id = increment_id
+                            break
+        except Exception: 
+            pass
 
         if is_success:
             if real_order_id in ["Not found", "", "None"]:
                 real_order_id = f"AUTO_{int(time.time())}"
             return {"status": "success", "ig_name": ig_name, "order_id": real_order_id}
         else:
-            return {"status": "error", "message": "Payment failed (Unknown Error)."}
+            return {"status": "error", "message": f"{err_text}"}
 
     except Exception as e: return {"status": "error", "message": f"System Error: {str(e)}"}
+
 
 # 🌟 NEW: 3.1 MAGIC CHESS SCRAPER FUNCTION [FULLY ASYNC & FIXED FALSE POSITIVE] 🌟
 async def process_mcc_order(game_id, zone_id, product_id, seen_order_ids=None):
@@ -543,49 +549,51 @@ async def process_mcc_order(game_id, zone_id, product_id, seen_order_ids=None):
         
         is_success = False
         real_order_id = "Not found"
+        err_text = "Unknown Error"
         
         try:
             pay_json = pay_response_raw.json()
             code = str(pay_json.get('code', pay_json.get('status', '')))
             msg = str(pay_json.get('msg', pay_json.get('message', ''))).lower()
             
-            if code in ['200', '0', '1'] or 'success' in msg:
+            if code in ['200', '0', '1'] or 'success' in msg or 'sucesso' in msg or 'ok' in msg:
                 is_success = True
                 real_order_id = str(pay_json.get('data', {}).get('order_id', 'Not found'))
             else:
                 err_text = pay_json.get('msg', 'Insufficient balance or API Error')
-                return {"status": "error", "message": f"Payment Failed: {err_text}"}
         except Exception:
             pay_text = pay_response_raw.text.lower()
-            if 'success' in pay_text or 'sucesso' in pay_text:
+            if 'success' in pay_text or 'sucesso' in pay_text or 'ok' in pay_text:
                 is_success = True
             else:
-                return {"status": "error", "message": "Payment Failed: Insufficient balance or Blocked."}
+                err_text = "Insufficient balance, Timeout or Blocked."
 
-        if is_success and real_order_id in ["Not found", "", "None"]:
-            await asyncio.sleep(2) 
-            try:
-                hist_res_raw = await asyncio.to_thread(scraper.get, order_api_url, params={'type': 'orderlist', 'p': '1', 'pageSize': '5'}, headers=headers)
-                hist_json = hist_res_raw.json()
-                if 'list' in hist_json and len(hist_json['list']) > 0:
-                    for order in hist_json['list']:
-                        increment_id = str(order.get('increment_id', ''))
+        # 🚨 NEW SAFETY NET: History ပြန်စစ်ခြင်း 🚨
+        await asyncio.sleep(2) 
+        try:
+            hist_res_raw = await asyncio.to_thread(scraper.get, order_api_url, params={'type': 'orderlist', 'p': '1', 'pageSize': '5'}, headers=headers)
+            hist_json = hist_res_raw.json()
+            if 'list' in hist_json and len(hist_json['list']) > 0:
+                for order in hist_json['list']:
+                    increment_id = str(order.get('increment_id', ''))
+                    
+                    if increment_id in seen_order_ids:
+                        continue
                         
-                        if increment_id in seen_order_ids:
-                            continue
-                            
-                        if str(order.get('user_id')) == str(game_id) and str(order.get('server_id')) == str(zone_id):
-                            if str(order.get('order_status', '')).lower() == 'success' or str(order.get('status')) == '1':
-                                real_order_id = increment_id
-                                break
-            except Exception: pass
+                    if str(order.get('user_id')) == str(game_id) and str(order.get('server_id')) == str(zone_id):
+                        if str(order.get('order_status', '')).lower() == 'success' or str(order.get('status')) == '1':
+                            is_success = True
+                            real_order_id = increment_id
+                            break
+        except Exception: 
+            pass
 
         if is_success:
             if real_order_id in ["Not found", "", "None"]:
                 real_order_id = f"AUTO_{int(time.time())}"
             return {"status": "success", "ig_name": ig_name, "order_id": real_order_id}
         else:
-            return {"status": "error", "message": "Payment failed."}
+            return {"status": "error", "message": f"{err_text}"}
 
     except Exception as e: return {"status": "error", "message": f"System Error: {str(e)}"}
 
