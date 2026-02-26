@@ -768,7 +768,7 @@ async def send_order_history(client, message: Message):
     
     await message.reply_document(
         document=file_obj,
-        caption=f"<emoji id='{EMOJI_4}'>🆔</emoji> **Order History**\n<emoji id='{EMOJI_1}'>🆔</emoji> User: @{user_name}\n<emoji id='{EMOJI_2}'>🆔</emoji> Records: {len(history_data)} (Max: 200)"
+        caption=f"📜 **Order History**\n👤 User: @{user_name}\n📊 Records: {len(history_data)} (Max: 200)"
     )
 
 # 🧹 CLEAN HISTORY COMMAND (.clean / /clean)
