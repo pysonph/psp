@@ -1,4 +1,4 @@
-# wanglin.py (Updated to use database.json & No Reseller Functions)
+# wanglin.py (Updated: Uses database.json, No Reseller Balance, Added User Access Control)
 import io
 import os
 import re
@@ -53,12 +53,20 @@ DB_FILE = 'database.json'
 
 def load_data():
     if not os.path.exists(DB_FILE):
-        return {"cookie": "", "orders": []}
+        return {"users": [str(OWNER_ID)], "cookie": "", "orders": []}
     try:
         with open(DB_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+            
+        # Ensure 'users' key exists
+        if "users" not in data:
+            data["users"] = [str(OWNER_ID)]
+        if "orders" not in data:
+            data["orders"] = []
+            
+        return data
     except Exception:
-        return {"cookie": "", "orders": []}
+        return {"users": [str(OWNER_ID)], "cookie": "", "orders": []}
 
 def save_data(data):
     try:
@@ -66,6 +74,29 @@ def save_data(data):
             json.dump(data, f, indent=4)
     except Exception as e:
         print(f"❌ Error saving database: {e}")
+
+# --- USER ACCESS CONTROL FUNCTIONS ---
+async def add_allowed_user(target):
+    data = load_data()
+    target_str = str(target).lower().replace('@', '')
+    if target_str not in data.get("users", []):
+        data["users"].append(target_str)
+        save_data(data)
+        return True
+    return False
+
+async def remove_allowed_user(target):
+    data = load_data()
+    target_str = str(target).lower().replace('@', '')
+    if target_str in data.get("users", []):
+        data["users"].remove(target_str)
+        save_data(data)
+        return True
+    return False
+
+async def get_allowed_users():
+    return load_data().get("users", [])
+# --------------------------------------
 
 async def get_main_cookie():
     return load_data().get("cookie", "")
@@ -93,7 +124,7 @@ async def save_order(tg_id, game_id, zone_id, item_name, price, order_id, status
     data["orders"].append(order_data)
     save_data(data)
 
-async def get_user_history(tg_id, limit=200):
+async def get_user_history(tg_id, limit=500):
     data = load_data()
     orders = data.get("orders", [])
     user_orders = [o for o in orders if o.get("tg_id") == str(tg_id)]
@@ -512,14 +543,81 @@ async def process_mcc_order(game_id, zone_id, product_id):
     except Exception as e: return {"status": "error", "message": f"System Error: {str(e)}"}
 
 # ==========================================
-# 4. 🛡️ FUNCTION TO CHECK AUTHORIZATION (OWNER ONLY)
+# 4. 🛡️ FUNCTION TO CHECK AUTHORIZATION
 # ==========================================
 async def is_authorized(message: Message):
-    return message.from_user.id == OWNER_ID
+    if message.from_user.id == OWNER_ID:
+        return True
+    
+    users = await get_allowed_users()
+    
+    # Check by User ID
+    if str(message.from_user.id) in users:
+        return True
+        
+    # Check by Username
+    if message.from_user.username:
+        username_lower = message.from_user.username.lower()
+        if username_lower in users:
+            return True
+            
+    return False
 
 # ==========================================
-# 5. OWNER COMMANDS (Reseller logic removed)
+# 5. OWNER COMMANDS (Add, Remove, Users, Cookie)
 # ==========================================
+
+@app.on_message((filters.command("add") | filters.regex(r"(?i)^\.add\b")) & filters.private)
+async def add_user_cmd(client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return await message.reply("❌ You are not the owner.")
+    
+    parts = message.text.split()
+    if len(parts) < 2:
+        return await message.reply("⚠️ Usage: `/add <user_id or @username>` or `.add <user_id or @username>`")
+    
+    target = parts[1].strip()
+    if await add_allowed_user(target):
+        await message.reply(f"✅ User `{target}` has been allowed to use the bot.")
+    else:
+        await message.reply(f"⚠️ User `{target}` is already in the allowed list.")
+
+@app.on_message((filters.command("remove") | filters.regex(r"(?i)^\.remove\b")) & filters.private)
+async def remove_user_cmd(client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return await message.reply("❌ You are not the owner.")
+    
+    parts = message.text.split()
+    if len(parts) < 2:
+        return await message.reply("⚠️ Usage: `/remove <user_id or @username>` or `.remove <user_id or @username>`")
+    
+    target = parts[1].strip()
+    if str(target) == str(OWNER_ID):
+        return await message.reply("❌ Cannot remove the owner.")
+        
+    if await remove_allowed_user(target):
+        await message.reply(f"✅ User `{target}` has been removed.")
+    else:
+        await message.reply(f"⚠️ User `{target}` is not in the allowed list.")
+
+@app.on_message((filters.command("users") | filters.regex(r"(?i)^\.users\b")) & filters.private)
+async def list_users_cmd(client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return await message.reply("❌ You are not the owner.")
+    
+    users = await get_allowed_users()
+    user_list = []
+    for u in users:
+        role = "👑 Owner" if str(u) == str(OWNER_ID) else "👤 User"
+        if str(u).isdigit():
+            user_list.append(f"🔹 ID: `{u}` ({role})")
+        else:
+            user_list.append(f"🔹 Username: `@{u}` ({role})")
+            
+    final_text = "\n".join(user_list) if user_list else "No users found."
+    await message.reply(f"📋 **Allowed Users List:**\n\n{final_text}")
+
+
 @app.on_message(filters.command("setcookie"))
 async def set_cookie_command(client, message: Message):
     if not await is_authorized(message): return await message.reply("❌ Only the Owner can set the Cookie.")
@@ -531,7 +629,7 @@ async def set_cookie_command(client, message: Message):
 
 @app.on_message(filters.regex("PHPSESSID") & filters.regex("cf_clearance"))
 async def handle_raw_cookie_dump(client, message: Message):
-    if not await is_authorized(message): 
+    if message.from_user.id != OWNER_ID: 
         return await message.reply("❌ You are not the owner.")
 
     text = message.text
@@ -564,7 +662,7 @@ async def handle_raw_cookie_dump(client, message: Message):
     except Exception as e:
         await message.reply(f"❌ Parsing Error: {str(e)}")
 
-@app.on_message(filters.command("balance"))
+@app.on_message(filters.command("balance") | filters.regex(r"(?i)^\.balance\b"))
 async def check_balance_command(client, message: Message):
     if not await is_authorized(message): return await message.reply("ɴᴏᴛ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜsᴇʀ.")
     
@@ -1214,7 +1312,10 @@ async def send_help_message(client, message: Message):
     if is_owner:
         help_text += (
             f"<b>👑 𝐎𝐰𝐧𝐞𝐫 𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬</b>\n"
-            f"🔸 <code>/setcookie</code> : Update Cookie\n"
+            f"🔸 <code>.add ID/Username</code>    : Add User\n"
+            f"🔸 <code>.remove ID/Username</code> : Remove User\n"
+            f"🔸 <code>.users</code>              : User List\n"
+            f"🔸 <code>/setcookie</code>         : Update Cookie\n"
         )
         
     help_text += f"━━━━━━━━━━━━━━━━"
@@ -1245,7 +1346,7 @@ async def send_welcome(client, message: Message):
         EMOJI_5 = "5954078884310814346" # 📞
 
         if await is_authorized(message):
-            status = "🟢 Aᴄᴛɪᴠᴇ (OWNER)"
+            status = "🟢 Aᴄᴛɪᴠᴇ" if message.from_user.id != OWNER_ID else "🟢 Aᴄᴛɪᴠᴇ (OWNER)"
         else:
             status = "🔴 Nᴏᴛ Aᴄᴛɪᴠᴇ"
             
@@ -1282,5 +1383,5 @@ if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.create_task(keep_cookie_alive())
 
-    print("Bot is successfully running (No Resellers & database.json)...")
+    print("Bot is successfully running (With User Auth & database.json)...")
     app.run()
